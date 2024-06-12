@@ -33,6 +33,9 @@ F<tab>/path/to/other<tab>https://url/to/other
 #define TDIR 0
 #define TFILE 1
 
+// Uncomment to enable correct size reporting (but potentially involves many requests, so may be slow)
+//#define PRECISE_STATFS_SIZE
+
 //#define FAKE_SIZE 9223372036854775807L
 #define FAKE_SIZE 0
 #define MAX_REDIRS 64
@@ -435,9 +438,11 @@ static int fuse_statfs(const char *path, struct statvfs *st) {
     unsigned long size = 0;
     for (file_t *scan = fileindex; scan; scan = scan->next) {
         if (scan->type == TFILE) {
+#ifdef PRECISE_STATFS_SIZE
             if (scan->size == -1) {
                 getFileSize(scan);
             }
+#endif
             if (scan->size >= 0)
                 size += scan->size;
             count++;
