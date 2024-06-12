@@ -1,3 +1,3 @@
-sbin_PROGRAMS=mount.indexfs
-mount_indexfs_SOURCES=indexfs.c
+sbin_PROGRAMS=mount.urlfs
+mount_urlfs_SOURCES=urlfs.c
 

@@ -14,11 +14,19 @@
 #include <signal.h>
 #include <limits.h>
 
+/* Config file layout:
+
+/path/to/index/file
+Header1: Value1
+Header2: Value2
+
+*/
+
 /* Index file layout:
 
 D<tab>/path/to
-F<tab>/path/to/file<tab>https://url/to/file[<tab>Size]
-F<tab>/path/to/other<tab>https://url/to/other[<tab>Size]
+F<tab>/path/to/file<tab>https://url/to/file
+F<tab>/path/to/other<tab>https://url/to/other
 
 */
 
@@ -45,15 +53,6 @@ struct block {
     void *buffer;
 };
 
-static int canWrite() {
-    struct fuse_context *ctx = fuse_get_context();
-
-    if (ctx->uid == getuid()) {
-        return 1;
-    }
-    return 0;
-}
-
 static file_t *getFileByName(const char *n) {
     for (file_t *scan = fileindex; scan; scan = scan->next) {
         if(!strcmp(scan->file, n)) {
@@ -61,74 +60,6 @@ static file_t *getFileByName(const char *n) {
         }
     }
     return NULL;
-}
-
-static file_t *createFileNode(const char *path, const char *url, int type) {
-    file_t *file = (file_t *)malloc(sizeof(file_t));
-    file->file = strdup(path);
-    if (url == NULL) {
-        file->url = NULL;
-    } else {
-        file->url = strdup(url);
-    }
-    file->size = -1;
-    file->type = type;
-    file->flags = 0;
-    file->next = NULL;
-
-    if (fileindex == NULL) {
-        fileindex = file;
-        return file;
-    }
-
-    for (file_t *scan = fileindex; scan; scan = scan->next) {
-        if (scan->next == NULL) {
-            scan->next = file;
-            return file;
-        }
-    }
-    free(file->file);
-    if (file->url) free(file->url);
-    free(file);
-    return NULL;
-}
-
-static void deleteFileNode(file_t *file) {
-    if (file != NULL) {
-        if (file == fileindex) {
-            fileindex = file->next;
-        } else {
-            for (file_t *scan = fileindex; scan; scan = scan->next) {
-                if (scan->next == file) {
-                    scan->next = file->next;
-                }
-            }
-        }
-
-        free(file->file);
-        if (file->url != NULL) free(file->url);
-        free(file);
-    }
-}
-
-static file_t *createDirectory(const char *path) {
-    file_t *file = getFileByName(path);
-    if (file != NULL) {
-        return NULL;
-    } 
-
-    file = createFileNode(path, NULL, TDIR);
-    return file;
-}
-
-static file_t *createFile(const char *path, const char *url) {
-    file_t *file = getFileByName(path);
-    if (file != NULL) {
-        return NULL;
-    } 
-
-    file = createFileNode(path, url, TFILE);
-    return file;
 }
 
 static size_t getBlock(void *data, size_t size, size_t nmemb, void *userp) {
@@ -145,11 +76,6 @@ static size_t getHeader(char *b, size_t size, size_t nitems, void *ud) {
         file->size = strtol(b + 16, 0, 10);
     }
 
-//    if (strncasecmp(b, "location: ", 10) == 0) {
-//        char *trim = strtok(b + 10, " \t\r\n");
-//        if (file->url != NULL) free(file->url);
-//        file->url = strdup(trim);
-//    }
     return nitems;
 }
 
@@ -167,23 +93,6 @@ static long getFileSize(struct index_s *file) {
         curl_easy_strerror(res);
     }
     curl_easy_cleanup(curl);
-    return 0;
-}
-
-static int fuse_truncate(const char *path, off_t offset) {
-    if (!canWrite()) return -EPERM;
-    file_t *file = getFileByName(path);
-    if (file == NULL) return -ENOENT;
-    if (file->type != TFILE) return -EISDIR;
-    return 0;
-}
-
-static int fuse_mkdir(const char *path, mode_t mode) {
-    if (!canWrite()) return -EPERM;
-    file_t *newdir = createDirectory(path);
-    if (newdir == NULL) {
-        return -EEXIST;
-    }
     return 0;
 }
 
@@ -261,62 +170,20 @@ static int fuse_getattr(const char *path, struct stat *st) {
         }
         return 0;
     }
-    
-    return -1;
-}
 
-static int fuse_rmdir(const char *path) {
-    if (!canWrite()) return -EPERM;
-    file_t *file = getFileByName(path);
-    if (file == NULL) return -ENOENT;
-    if (file->type != TDIR) return -ENOTDIR;
-    deleteFileNode(file);
-    return 0;
+    return -1;
 }
 
 static int fuse_open(const char *path, struct fuse_file_info *fi) {
     struct index_s *file = getFileByName(path);
 
+    if (file == NULL)
+        return -ENOENT;
 
-    if (file == NULL) {
-        if ((fi->flags & O_ACCMODE) == O_RDONLY) {
-            return -ENOENT;
-        }
-
-        if (!canWrite()) return -EPERM;
-        file = createFile(path, NULL);
-        return 0;
-    }
-    
     return 0;
 }
 
 static int fuse_release(const char *path, struct fuse_file_info *fi) {
-    return 0;
-}
-
-static int fuse_write(const char *path, const char *data, size_t len, off_t offset, struct fuse_file_info *fi) {
-    if (!canWrite()) return -EPERM;
-    return 0;
-}
-
-
-static int fuse_write_buf(const char *path, struct fuse_bufvec *buf, off_t off, struct fuse_file_info *fi) {
-    if (!canWrite()) return -EPERM;
-    return 0;
-}
-
-
-static int fuse_utimens(const char *path, const struct timespec tv[2]) {
-    if (!canWrite()) return -EPERM;
-    return 0;
-}
-
-static int fuse_create(const char *path, mode_t mode, struct fuse_file_info *finfo) {
-    if (!canWrite()) return -EPERM;
-    file_t *file = getFileByName(path);
-    if (file != NULL) return -EEXIST;
-    createFile(path, NULL);
     return 0;
 }
 
@@ -378,7 +245,7 @@ static int fuse_getxattr(const char *path, const char *attr, char *buffer, size_
 
     if (strcmp(attr, "url") == 0) {
         if (file->url == NULL) return 0;
-    
+
         if (len == 0) {
             return strlen(file->url);
         }
@@ -408,61 +275,6 @@ static int fuse_getxattr(const char *path, const char *attr, char *buffer, size_
     return 0;
 }
 
-static int fuse_setxattr(const char *path, const char *attr, const char *value, size_t len, int flags) {
-
-    if (!canWrite()) return -EPERM;
-    file_t *file = getFileByName(path);
-    if (file == NULL) return -ENOENT;
-
-
-    if (strcmp(attr, "url") == 0) {
-        if (file->url != NULL) free(file->url);
-        file->url = malloc(len + 1);
-        memset(file->url, 0, len + 1);
-        memcpy(file->url, value, len);
-        file->size = -1;
-        return 0;
-    }
-
-    if (strcmp(attr, "refresh") == 0) {
-        file->size = -1;
-        return 0;
-    }
-
-    if (strcmp(attr, "size") == 0) {
-        char temp[len + 1];
-        memcpy(temp, value, len);
-        temp[len] = 0;
-        file->size = strtoul(temp, NULL, 10);
-        return 0;
-    }
-
-    return -ENOENT;
-}
-
-static int fuse_rename(const char *src, const char *dst) { 
-    if (!canWrite()) return -EPERM;
-    file_t *from = getFileByName(src);
-    file_t *to = getFileByName(dst);
-
-    if (from == NULL) return -ENOENT;
-
-    free(from->file);
-    from->file = strdup(dst);
-
-    deleteFileNode(to);
-
-    return 0;
-}
-
-static int fuse_unlink(const char *path) {
-    if (!canWrite()) return -EPERM;
-    struct index_s *file = getFileByName(path);
-    if (file == NULL) return -ENOENT;
-    deleteFileNode(file);
-    return 0;
-}
-
 static int fuse_statfs(const char *path, struct statvfs *st) {
 
     unsigned long count = 0;
@@ -487,10 +299,6 @@ static int fuse_statfs(const char *path, struct statvfs *st) {
 
     return 0;
 }
-
-
-
-
 
 static void fuse_load_config() {
     FILE *f = fopen(config, "r");
@@ -557,59 +365,19 @@ static void *fuse_init(struct fuse_conn_info *conn) {
     return NULL;
 }
 
-static void fuse_save(void * __attribute__((unused)) dunno) {
-    FILE *f = fopen(config, "w");
-    if (!f) {
-        printf("Error saving state!\n");
-        return;
-    }
-    for (file_t *scan = fileindex; scan; scan = scan->next) {
-        if (scan->type == TDIR) {
-            fprintf(f, "D\t%s\n", scan->file);
-        } else if (scan->type == TFILE) {
-            if (scan->url == NULL) {
-                fprintf(f, "F\t%s\n", scan->file);
-            } else {
-                if (scan->size >= 0) {
-                    fprintf(f, "F\t%s\t%s\t%lu\n", scan->file, scan->url, scan->size);
-                } else {
-                    fprintf(f, "F\t%s\t%s\n", scan->file, scan->url);
-                }
-            }
-        }
-    }
-    fclose(f);
-}
-
-void sighup(int sig) {
-    fuse_save(NULL);
-}
-
 void sigusr1(int sig) {
     fuse_load_config();
 }
 
 static struct fuse_operations operations = {
-
-    .mkdir      = fuse_mkdir,
     .readdir	= fuse_readdir,
     .getattr	= fuse_getattr,
-    .rmdir      = fuse_rmdir,
     .open       = fuse_open,
-    .truncate   = fuse_truncate,
     .release    = fuse_release,
-    .write_buf  = fuse_write_buf,
-    .write      = fuse_write,
-    .utimens    = fuse_utimens,
-    .create     = fuse_create,
     .read       = fuse_read,
     .listxattr  = fuse_listxattr,
     .getxattr   = fuse_getxattr,
-    .setxattr   = fuse_setxattr,
-    .rename     = fuse_rename,
-    .unlink     = fuse_unlink,
     .init       = fuse_init,
-    .destroy    = fuse_save,
     .statfs     = fuse_statfs,
 };
 
@@ -638,11 +406,11 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        if (argv[i][0] == '-') { // 
+        if (argv[i][0] == '-') {
             printf("Unknown option: %s\n", argv[i]);
             return -1;
         }
-    
+
         if (config[0] == 0) {
             char *c = realpath(argv[i], config);
         } else if (mp == NULL) {
@@ -654,7 +422,7 @@ int main(int argc, char **argv) {
     }
 
     if (config == NULL || mp == NULL) {
-        printf("Usage: %s [-o option...] indexfile mountpoint\n", argv[0]);
+        printf("Usage: %s [-o option...] configfile mountpoint\n", argv[0]);
         return -1;
     }
 

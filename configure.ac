@@ -1,5 +1,5 @@
 AC_PREREQ([2.10])
-AC_INIT([indexfs], [1.0.0], [matt@majenko.co.uk])
+AC_INIT([urlfs], [1.0.0], [tmcqueen-materials@github.com,matt@majenko.co.uk])
 AM_INIT_AUTOMAKE([subdir-objects no-dependencies])
 AC_CONFIG_MACRO_DIR([m4])
 

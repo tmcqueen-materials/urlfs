@@ -1,0 +1,5 @@
+06-12-2024
+----------
+
+Made filesystem fully read-only, and add additional configuration knobs for authentication headers.
+
