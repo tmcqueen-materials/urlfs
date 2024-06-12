@@ -12,7 +12,7 @@ without warranty of any kind.
 Build
 ==================
 autoreconf --install
-dnf install fuse-devel OR apt install libfuse-devel
+dnf install fuse-devel OR apt install libfuse-dev
 ./configure
 make
 make install

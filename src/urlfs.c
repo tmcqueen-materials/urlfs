@@ -62,6 +62,79 @@ static file_t *getFileByName(const char *n) {
     return NULL;
 }
 
+// Although we are read-only, we need these internal helpers to allow
+// adding of files and directory from the index file
+
+static file_t *createFileNode(const char *path, const char *url, int type) {
+    file_t *file = (file_t *)malloc(sizeof(file_t));
+    file->file = strdup(path);
+    if (url == NULL) {
+        file->url = NULL;
+    } else {
+        file->url = strdup(url);
+    }
+    file->size = -1;
+    file->type = type;
+    file->flags = 0;
+    file->next = NULL;
+
+    if (fileindex == NULL) {
+        fileindex = file;
+        return file;
+    }
+
+    for (file_t *scan = fileindex; scan; scan = scan->next) {
+        if (scan->next == NULL) {
+            scan->next = file;
+            return file;
+        }
+    }
+    free(file->file);
+    if (file->url) free(file->url);
+    free(file);
+    return NULL;
+}
+
+static void deleteFileNode(file_t *file) {
+    if (file != NULL) {
+        if (file == fileindex) {
+            fileindex = file->next;
+        } else {
+            for (file_t *scan = fileindex; scan; scan = scan->next) {
+                if (scan->next == file) {
+                    scan->next = file->next;
+                }
+            }
+        }
+
+        free(file->file);
+        if (file->url != NULL) free(file->url);
+        free(file);
+    }
+}
+
+static file_t *createDirectory(const char *path) {
+    file_t *file = getFileByName(path);
+    if (file != NULL) {
+        return NULL;
+    } 
+
+    file = createFileNode(path, NULL, TDIR);
+    return file;
+}
+
+static file_t *createFile(const char *path, const char *url) {
+    file_t *file = getFileByName(path);
+    if (file != NULL) {
+        return NULL;
+    } 
+
+    file = createFileNode(path, url, TFILE);
+    return file;
+}
+
+//
+
 static size_t getBlock(void *data, size_t size, size_t nmemb, void *userp) {
     struct block *block = (struct block *)userp;
     memcpy(block->buffer  + block->pos, data, nmemb);
@@ -383,7 +456,6 @@ static struct fuse_operations operations = {
 
 int main(int argc, char **argv) {
 
-    signal(SIGHUP, sighup);
     signal(SIGUSR1, sigusr1);
 
     int opt;
