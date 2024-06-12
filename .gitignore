@@ -8,4 +8,4 @@ compile
 autom4te.cache/*
 configure
 aclocal.m4
-
+tests/*
