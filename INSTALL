@@ -9,6 +9,14 @@ are permitted in any medium without royalty provided the copyright
 notice and this notice are preserved.  This file is offered as-is,
 without warranty of any kind.
 
+Build
+==================
+autoreconf --install
+dnf install fuse-devel OR apt install libfuse-devel
+./configure
+make
+make install
+
 Basic Installation
 ==================
 
