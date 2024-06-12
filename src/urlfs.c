@@ -360,6 +360,12 @@ static int fuse_read( const char *path, char *buffer, size_t size, off_t offset,
         curl_easy_strerror(res);
     }
     curl_easy_cleanup(curl);
+
+    // If we read te full remote resource, we know its size,
+    // so update accordingly.
+    if (!file->allowrr)
+      file->size = block.pos;
+
     return block.buffer_pos;
 }
 
