@@ -34,6 +34,9 @@ F<tab>/path/to/other<tab>https://url/to/other
 #define TFILE 1
 
 char config[PATH_MAX] = {0};
+char idxfil[PATH_MAX] = {0};
+
+struct curl_slist *hdrs = NULL;
 
 #define F_KEEP 0x0001
 
@@ -156,6 +159,8 @@ static long getFileSize(struct index_s *file) {
     file->size = 0; // Temporary, I hope
     CURL *curl = curl_easy_init();
     curl_easy_setopt(curl, CURLOPT_URL, file->url);
+    if (hdrs)
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
     curl_easy_setopt(curl, CURLOPT_HEADER, 0L);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -276,6 +281,8 @@ static int fuse_read( const char *path, char *buffer, size_t size, off_t offset,
 
     CURL *curl = curl_easy_init();
     curl_easy_setopt(curl, CURLOPT_URL, file->url);
+    if (hdrs)
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
     curl_easy_setopt(curl, CURLOPT_RANGE, range);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &block);
@@ -373,8 +380,8 @@ static int fuse_statfs(const char *path, struct statvfs *st) {
     return 0;
 }
 
-static void fuse_load_config() {
-    FILE *f = fopen(config, "r");
+static void fuse_load_index() {
+    FILE *f = fopen(idxfil, "r");
     if (f == NULL) return;
 
     if (fileindex != NULL) {
@@ -430,6 +437,32 @@ static void fuse_load_config() {
             deleteFileNode(scan);
         }
     }
+}
+
+static void fuse_load_config() {
+    FILE *f = fopen(config, "r");
+    if (f == NULL) return;
+
+    if (hdrs) {
+        curl_slist_free_all(hdrs);
+        hdrs = NULL;
+    }
+
+    int first = 0;
+    char entry[32768];
+    while (fgets(entry, 32768, f) != NULL) {
+        char *val = strtok(entry, "\t\r\n");
+        if (!first && strlen(val) > 0 && val[0] != '#') {
+            strcpy(idxfil, val);
+            first = 1;
+        } else if (strlen(val) > 0 && val[0] != '#') {
+            curl_slist_append(hdrs, val);
+        }
+    }
+    fclose(f);
+
+    if (first)
+        fuse_load_index();
 }
 
 
