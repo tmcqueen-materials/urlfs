@@ -533,7 +533,7 @@ static void fuse_load_config() {
             strcpy(idxfil, val);
             first = 1;
         } else if (strlen(val) > 0 && val[0] != '#') {
-            curl_slist_append(hdrs, val);
+            hdrs = curl_slist_append(hdrs, val);
         }
     }
     fclose(f);
