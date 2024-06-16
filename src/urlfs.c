@@ -1,7 +1,15 @@
-#define FUSE_USE_VERSION 29
 #define _FILE_OFFSET_BITS 64
 
+#if defined(HAVE_FUSE3) && defined(HAVE_FUSE3_H)
+#define FUSE_USE_VERSION 30
+#include <fuse3.h>
+#elif !defined(HAVE_FUSE3) && !defined(HAVE_FUSE3_H)
+#define FUSE_USE_VERSION 29
 #include <fuse.h>
+#else
+#error "Mismatched fuse library and headers found."
+#endif
+
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/types.h>
@@ -229,10 +237,17 @@ static long getFileSize(struct index_s *file) {
     return 0;
 }
 
+#if defined(HAVE_FUSE3) && defined(HAVE_FUSE3_H)
+static int fuse_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags dnu) {
+
+    filler(buffer, ".", NULL, 0);
+    filler(buffer, "..", NULL, 0);
+#else
 static int fuse_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
 
     filler(buffer, ".", NULL, 0);
     filler(buffer, "..", NULL, 0);
+#endif
 
     int l = strlen(path);
     char search[l + 2];
@@ -259,7 +274,11 @@ static int fuse_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, 
     return 0;
 }
 
+#if defined(HAVE_FUSE3) && defined(HAVE_FUSE3_H)
+static int fuse_getattr(const char *path, struct stat *st, struct fuse_file_info *dnu) {
+#else
 static int fuse_getattr(const char *path, struct stat *st) {
+#endif
 
     st->st_uid = getuid();
     st->st_gid = getgid();
@@ -542,8 +561,11 @@ static void fuse_load_config() {
         fuse_load_index();
 }
 
-
+#if defined(HAVE_FUSE3) && defined(HAVE_FUSE3_H)
+static void *fuse_init(struct fuse_conn_info *conn, struct fuse_config *dnu) {
+#else
 static void *fuse_init(struct fuse_conn_info *conn) {
+#endif
     fuse_load_config();
     return NULL;
 }
