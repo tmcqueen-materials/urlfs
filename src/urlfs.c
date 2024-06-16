@@ -2,7 +2,7 @@
 
 #if defined(HAVE_FUSE3) && defined(HAVE_FUSE3_H)
 #define FUSE_USE_VERSION 30
-#include <fuse3.h>
+#include <fuse3/fuse.h>
 #elif !defined(HAVE_FUSE3) && !defined(HAVE_FUSE3_H)
 #define FUSE_USE_VERSION 29
 #include <fuse.h>
@@ -240,8 +240,8 @@ static long getFileSize(struct index_s *file) {
 #if defined(HAVE_FUSE3) && defined(HAVE_FUSE3_H)
 static int fuse_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags dnu) {
 
-    filler(buffer, ".", NULL, 0);
-    filler(buffer, "..", NULL, 0);
+    filler(buffer, ".", NULL, 0, 0);
+    filler(buffer, "..", NULL, 0, 0);
 #else
 static int fuse_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
 
@@ -265,7 +265,11 @@ static int fuse_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, 
             char *fn = strtok(sub, "/");
             char *more = strtok(NULL, "/");
             if (more == NULL) {
+#if defined(HAVE_FUSE3) && defined(HAVE_FUSE3_H)
+                filler(buffer, fn, NULL, 0, 0);
+#else
                 filler(buffer, fn, NULL, 0);
+#endif
             }
             free(sub);
         }
