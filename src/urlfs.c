@@ -257,6 +257,8 @@ static int fuse_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, 
     filler(buffer, "..", NULL, 0);
 #endif
 
+    fi->direct_io = 1;
+
     int l = strlen(path);
     char search[l + 2];
     strcpy(search, path);
