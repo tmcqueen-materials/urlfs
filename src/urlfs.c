@@ -24,9 +24,8 @@
 
 /* Config file layout:
 
-/path/to/index/file
-Header1: Value1
-Header2: Value2
+/path/to/index/file1<tab>Header1: Value1<tab>Header2: Value2...
+/path/to/index/file2<tab>Header3: Value3...
 
 */
 
@@ -49,18 +48,23 @@ F<tab>/path/to/other<tab>https://url/to/other
 #define MAX_REDIRS 64
 
 char config[PATH_MAX] = {0};
-char idxfil[PATH_MAX] = {0};
 
-struct curl_slist *hdrs = NULL;
+typedef struct hdrs_s {
+    struct curl_slist *hdrs;
+    struct hdrs_s *next;
+} hdrs_t;
+
+hdrs_t *hdrsindex = NULL;
 
 #define F_KEEP 0x0001
+#define F_ALLOWRR 0x0002
 
 typedef struct index_s {
     int type;
     char *file;
     char *url;
+    struct curl_slist *hdrs;
     long size;
-    char allowrr;
     int flags;
     struct index_s *next;
 } file_t;
@@ -92,7 +96,7 @@ static file_t *getFileByName(const char *n) {
 // Although we are read-only, we need these internal helpers to allow
 // adding of files and directory from the index file
 
-static file_t *createFileNode(const char *path, const char *url, int type) {
+static file_t *createFileNode(const char *path, const char *url, int type, struct curl_slist *hdrs) {
     file_t *file = (file_t *)malloc(sizeof(file_t));
     file->file = strdup(path);
     if (url == NULL) {
@@ -100,8 +104,8 @@ static file_t *createFileNode(const char *path, const char *url, int type) {
     } else {
         file->url = strdup(url);
     }
+    file->hdrs = hdrs;
     file->size = -1;
-    file->allowrr = 0;
     file->type = type;
     file->flags = 0;
     file->next = NULL;
@@ -117,8 +121,11 @@ static file_t *createFileNode(const char *path, const char *url, int type) {
             return file;
         }
     }
+
+    // should never reach here...
     free(file->file);
     if (file->url) free(file->url);
+    // file->hdrs cleaned up on next load_config call if this was the last file referencing it.
     free(file);
     return NULL;
 }
@@ -137,6 +144,7 @@ static void deleteFileNode(file_t *file) {
 
         free(file->file);
         if (file->url != NULL) free(file->url);
+        // file->hdrs cleaned up on next load_config call if this was the last file referencing it.
         free(file);
     }
 }
@@ -145,19 +153,19 @@ static file_t *createDirectory(const char *path) {
     file_t *file = getFileByName(path);
     if (file != NULL) {
         return NULL;
-    } 
+    }
 
-    file = createFileNode(path, NULL, TDIR);
+    file = createFileNode(path, NULL, TDIR, NULL);
     return file;
 }
 
-static file_t *createFile(const char *path, const char *url) {
+static file_t *createFile(const char *path, const char *url, struct curl_slist *hdrs) {
     file_t *file = getFileByName(path);
     if (file != NULL) {
         return NULL;
-    } 
+    }
 
-    file = createFileNode(path, url, TFILE);
+    file = createFileNode(path, url, TFILE, hdrs);
     return file;
 }
 
@@ -197,7 +205,7 @@ static size_t getHeader(char *b, size_t size, size_t nitems, void *ud) {
     }
 
     if (strncasecmp(b, "accept-ranges: bytes", 20) == 0) {
-        file->allowrr = 1;
+        file->flags |= F_ALLOWRR;
     }
 
     if (strncasecmp(b, "location: ", 10) == 0) {
@@ -221,8 +229,8 @@ static long getFileSize(struct index_s *file) {
         file->size = -1; // Not all URLs return a content length. So size might still be -1 after this call.
         CURL *curl = curl_easy_init();
         curl_easy_setopt(curl, CURLOPT_URL, file->url);
-        if (hdrs)
-            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
+        if (file->hdrs)
+            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, file->hdrs);
         curl_easy_setopt(curl, CURLOPT_HEADER, 0L);
         curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L); // we manually chase location to avoid spurious lengths from a 30x redirect return
@@ -363,7 +371,7 @@ static int fuse_read( const char *path, char *buffer, size_t size, off_t offset,
 
     struct block block;
 
-    if (file->allowrr)
+    if (file->flags & F_ALLOWRR)
         block.offset = 0;
     else
         block.offset = offset;
@@ -374,9 +382,9 @@ static int fuse_read( const char *path, char *buffer, size_t size, off_t offset,
 
     CURL *curl = curl_easy_init();
     curl_easy_setopt(curl, CURLOPT_URL, file->url);
-    if (hdrs)
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
-    if (file->allowrr)
+    if (file->hdrs)
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, file->hdrs);
+    if (file->flags & F_ALLOWRR)
         curl_easy_setopt(curl, CURLOPT_RANGE, range);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &block);
@@ -389,7 +397,7 @@ static int fuse_read( const char *path, char *buffer, size_t size, off_t offset,
 
     // If we read te full remote resource, we know its size,
     // so update accordingly.
-    if (!file->allowrr)
+    if (!(file->flags & F_ALLOWRR))
       file->size = block.pos;
 
     return block.buffer_pos;
@@ -483,15 +491,28 @@ static int fuse_statfs(const char *path, struct statvfs *st) {
     return 0;
 }
 
-static void fuse_load_index() {
-    FILE *f = fopen(idxfil, "r");
-    if (f == NULL) return;
-
+static void fuse_unmark_files(void) {
     if (fileindex != NULL) {
         for (file_t *scan = fileindex; scan; scan = scan->next) {
             scan->flags &= ~F_KEEP;
         }
     }
+}
+
+static void fuse_remove_unmarked_files(void) {
+    if (fileindex != NULL) {
+        for (file_t *scan = fileindex; scan; scan = scan->next) {
+            if ((scan->flags & F_KEEP) == 0) {
+                deleteFileNode(scan);
+            }
+        }
+    }
+}
+
+// Call fuse_unmark_files before calling load_index as needed, then call fuse_remove_unmarked_files to cleanup
+static void fuse_load_index(char *idxfil, struct curl_slist *hdrs) {
+    FILE *f = fopen(idxfil, "r");
+    if (f == NULL) return;
 
     char entry[32768];
     while (fgets(entry, 32768, f) != NULL) {
@@ -511,8 +532,9 @@ static void fuse_load_index() {
                     file->url = strdup(url);
                 }
                 file->size = -1;
+                file->hdrs = hdrs; // possibly orphan hdrs list freed by load_config process
             } else {
-                file = createFile(name, url);
+                file = createFile(name, url, hdrs);
             }
 
             file->flags |= F_KEEP;
@@ -523,6 +545,7 @@ static void fuse_load_index() {
                     free(file->url);
                     file->url = NULL;
                 }
+                file->hdrs = NULL; // possibly orphan hdrs list freed by load_config process
             } else {
                 file = createDirectory(name);
             }
@@ -530,39 +553,60 @@ static void fuse_load_index() {
         }
     }
     fclose(f);
-
-    for (file_t *scan = fileindex; scan; scan = scan->next) {
-        if ((scan->flags & F_KEEP) == 0) {
-            deleteFileNode(scan);
-        }
-    }
 }
 
 static void fuse_load_config() {
     FILE *f = fopen(config, "r");
     if (f == NULL) return;
 
-    if (hdrs) {
-        curl_slist_free_all(hdrs);
-        hdrs = NULL;
+    // All headers are replaced on reload with new values
+    if (hdrsindex != NULL) {
+        for (hdrs_t *scan = hdrsindex; scan;) {
+            hdrs_t *nextscan = scan->next;
+            if (scan->hdrs)
+                curl_slist_free_all(scan->hdrs);
+            free(scan);
+            scan = nextscan;
+        }
+        hdrsindex = NULL;
     }
 
-    int first = 0;
-    char entry[32768];
-    while (fgets(entry, 32768, f) != NULL) {
+    fuse_unmark_files();
+
+    char entry[65536];
+    while (fgets(entry, 65536, f) != NULL) {
         char *val = strtok(entry, "\t\r\n");
+        char idxfil[PATH_MAX] = { 0 };
         if (val == NULL) continue;
-        if (!first && strlen(val) > 0 && val[0] != '#') {
-            strcpy(idxfil, val);
-            first = 1;
-        } else if (strlen(val) > 0 && val[0] != '#') {
-            hdrs = curl_slist_append(hdrs, val);
+        if (strlen(val) > 0 && val[0] != '#') {
+            strncpy(idxfil, val, PATH_MAX);
+            val = strtok(NULL, "\t\r\n");
+            struct curl_slist *hdrs = NULL;
+            for (;val != NULL && strlen(val) > 0;val = strtok(NULL, "\t\r\n")) {
+                if (strlen(val) > 0 && val[0] != '#')
+                    hdrs = curl_slist_append(hdrs, val);
+            }
+            // add headers to linked list
+            if (hdrs != NULL) {
+                hdrs_t *hdr = (hdrs_t *)malloc(sizeof(hdrs_t));
+                hdr->hdrs = hdrs;
+                hdr->next = NULL;
+                if (hdrsindex == NULL) {
+                    hdrsindex = hdr;
+                } else {
+                    hdrs_t *scan = hdrsindex;
+                    for (; scan->next; scan = scan->next);
+                    scan->next = hdr;
+                }
+            }
+            // load files
+            fuse_load_index(idxfil, hdrs);
         }
     }
-    fclose(f);
 
-    if (first)
-        fuse_load_index();
+    fuse_remove_unmarked_files();
+
+    fclose(f);
 }
 
 #if defined(HAVE_FUSE3) && defined(HAVE_FUSE3_H)
