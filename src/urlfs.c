@@ -236,6 +236,7 @@ static long getFileSize(struct index_s *file) {
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L); // we manually chase location to avoid spurious lengths from a 30x redirect return
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, &hdrblock);
         curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, getHeader);
+        curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L); // needed to avoid caching value associated with an error
         int res = curl_easy_perform(curl);
         if (res != CURLE_OK) {
             curl_easy_strerror(res);
@@ -391,11 +392,14 @@ static int fuse_read( const char *path, char *buffer, size_t size, off_t offset,
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &block);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, getBlock);
+    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L); // needed to avoid returning data associated with an error
     int res = curl_easy_perform(curl);
     if (res != CURLE_OK) {
-        curl_easy_strerror(res);
+        curl_easy_cleanup(curl);
+        return -EIO;
+    } else {
+        curl_easy_cleanup(curl);
     }
-    curl_easy_cleanup(curl);
 
     // If we read te full remote resource, we know its size,
     // so update accordingly.
