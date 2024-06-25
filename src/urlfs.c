@@ -58,6 +58,7 @@ hdrs_t *hdrsindex = NULL;
 
 #define F_KEEP 0x0001
 #define F_ALLOWRR 0x0002
+#define F_EIO 0x0004
 
 typedef struct index_s {
     int type;
@@ -396,6 +397,7 @@ static int fuse_read( const char *path, char *buffer, size_t size, off_t offset,
     int res = curl_easy_perform(curl);
     if (res != CURLE_OK) {
         curl_easy_cleanup(curl);
+        file->flags |= F_EIO;
         return -EIO;
     } else {
         curl_easy_cleanup(curl);
@@ -406,10 +408,20 @@ static int fuse_read( const char *path, char *buffer, size_t size, off_t offset,
     if (!(file->flags & F_ALLOWRR))
       file->size = block.pos;
 
+    // clear error flag on successful read
+    file->flags &= ~F_EIO;
+
     return block.buffer_pos;
 }
 
 static int fuse_listxattr(const char *path, char *buffer, size_t len) {
+    if (strcmp(path,"/") == 0 || strlen(path) == 0) {
+        if (len < 8) {
+            return 8;
+        }
+        memcpy(buffer, "failing\0", 8);
+        return 8;
+    }
     if (strcmp(path, ".") == 0) return 0;
     if (strcmp(path, "..") == 0) return 0;
 
@@ -418,17 +430,35 @@ static int fuse_listxattr(const char *path, char *buffer, size_t len) {
     if (file->type != TFILE) return 0;
     if (file->url == NULL) return 0;
 
-    if (len == 0) {
-        return 12;
+    if (len < 17) {
+        return 17;
     }
 
     memcpy(buffer, "url\0refresh\0size\0", 17);
-    return 12;
+    return 17;
 }
 
 static int fuse_getxattr(const char *path, const char *attr, char *buffer, size_t len) {
-
-    if (strcmp(path, "/") == 0) return 0;
+    if (strcmp(path, "/") == 0 || strlen(path) == 0) {
+        // TODO: This is all susceptible to a TOCTOU problem with regard to buffer lengths.
+        int totlen = 0;
+        for (file_t *scan = fileindex; scan; scan = scan->next) {
+            if (scan->flags & F_EIO) {
+                totlen += strlen(scan->file)+1;
+            }
+        }
+        if (len < totlen)
+            return totlen;
+        totlen = 0;
+        for (file_t *scan = fileindex; scan; scan = scan->next) {
+            if (scan->flags & F_EIO) {
+                memcpy(buffer+totlen, scan->file, strlen(scan->file));
+                totlen += strlen(scan->file);
+                memcpy(buffer+totlen, "\n", 1); totlen++;
+            }
+        }
+        return totlen;
+    }
     if (strcmp(path, ".") == 0) return 0;
     if (strcmp(path, "..") == 0) return 0;
 
